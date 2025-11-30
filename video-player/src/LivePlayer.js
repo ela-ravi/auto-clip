@@ -337,7 +337,7 @@ const LivePlayer = () => {
       <h2 style={{ color: "red" }}>LIVE STREAM</h2>
 
       {/* Video Controls */}
-      <div style={{ marginBottom: "20px", padding: "10px", background: "#f5f5f5", display: "inline-block", borderRadius: "8px" }}>
+      {/* <div style={{ marginBottom: "20px", padding: "10px", background: "#f5f5f5", display: "inline-block", borderRadius: "8px" }}>
         <div style={{ marginBottom: "10px" }}>
           <label style={{ marginRight: "10px", fontWeight: "bold" }}>Select Video:</label>
           <select
@@ -362,7 +362,7 @@ const LivePlayer = () => {
           />
           {uploading && <span style={{ color: "blue" }}>Uploading...</span>}
         </div>
-      </div>
+      </div> */}
 
       <div style={{ marginBottom: "12px" }}>
         <button onClick={handleHeart} style={{ fontSize: "16px", padding: "6px 10px", marginRight: "8px", cursor: "pointer" }}>
