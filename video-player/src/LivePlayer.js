@@ -366,10 +366,10 @@ const LivePlayer = () => {
 
       <div style={{ marginBottom: "12px" }}>
         <button onClick={handleHeart} style={{ fontSize: "16px", padding: "6px 10px", marginRight: "8px", cursor: "pointer" }}>
-          ❤️ {heartCount}
+          ❤️ 
         </button>
         <button onClick={handleDislike} style={{ fontSize: "16px", padding: "6px 10px", cursor: "pointer" }}>
-          👎 {dislikeCount}
+          👎 
         </button>
       </div>
 
