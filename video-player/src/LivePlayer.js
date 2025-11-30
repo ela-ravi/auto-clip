@@ -10,7 +10,7 @@ const LivePlayer = () => {
   const streamURL = `${apiBase}/stream/stream.m3u8`;
 
   // Player State
-  const [error, setError] = useState(null);
+  const [error,] = useState(null);
   const [status, setStatus] = useState("Initializing...");
 
   // Clip State
