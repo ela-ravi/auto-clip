@@ -6,9 +6,10 @@ import threading
 import uuid
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from flask import Flask, send_from_directory, render_template_string, request, jsonify, send_file
+from flask import Flask, send_from_directory, render_template_string, request, jsonify, send_file, Response
 from flask_cors import CORS
 from supabase import create_client, Client
+import requests
 
 # ---- load config ----
 load_dotenv()
@@ -65,6 +66,26 @@ def add_cors_headers(response):
     response.headers.setdefault("Access-Control-Expose-Headers", "Content-Type, Content-Disposition")
     response.headers.setdefault("Access-Control-Max-Age", "86400")
     return response
+
+@app.route("/live/<path:filename>", methods=["GET"])
+def proxy_live(filename):
+    try:
+        # Build public storage URL: {SUPABASE_URL}/storage/v1/object/public/{BUCKET}/live/{filename}
+        base = SUPABASE_URL.rstrip("/")
+        url = f"{base}/storage/v1/object/public/{SUPABASE_BUCKET}/live/{filename}"
+        r = requests.get(url, timeout=20)
+        # Pass through content-type if present
+        headers = {}
+        ctype = r.headers.get("Content-Type")
+        if ctype:
+            headers["Content-Type"] = ctype
+        # avoid caching playlist/segments
+        headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        headers["Pragma"] = "no-cache"
+        headers["Expires"] = "0"
+        return Response(r.content, status=r.status_code, headers=headers)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/clips", methods=["GET"])
 def list_clips():

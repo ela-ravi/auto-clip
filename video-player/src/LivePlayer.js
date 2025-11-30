@@ -5,9 +5,8 @@ const LivePlayer = () => {
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
   const apiBase = process.env.REACT_APP_API_BASE || "http://localhost:5001";
-  // Use the local backend stream endpoint (serves HLS files from the server)
-  // This avoids Supabase signed-url issues while developing locally.
-  const streamURL = `${apiBase}/stream/stream.m3u8`;
+  // Stream via backend proxy to Supabase storage
+  const streamURL = `${apiBase}/live/stream.m3u8`;
 
   // Player State
   const [error,] = useState(null);
