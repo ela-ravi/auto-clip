@@ -1,0 +1,250 @@
+Absolutely — here is your **complete, clean, professionally formatted PRD** for your Micro-SaaS product 🚀
+(You can directly use this for a proposal, Jira ticketing, or onboarding collaborators.)
+
+---
+
+# 📌 Product Requirements Document (PRD)
+
+## Product: **Hot Moments Auto-Clipping SDK for OTT Platforms**
+
+Version: 0.1 — POC
+Owner: **Elamurugan**
+
+---
+
+## 1️⃣ Problem Statement
+
+OTT applications struggle to create and deliver **highlight clips** from Live or VOD content in real-time.
+Currently, editors manually clip and upload highlights, causing **delayed fan engagement** and **lost viral potential**.
+
+---
+
+## 2️⃣ Proposed Solution
+
+Provide an embeddable **SDK** that integrates with OTT video players to:
+
+✔ Detect high-engagement “Hot Moments”
+✔ Auto-generate a **30-second backward** video clip
+✔ Store the clip & notify the client app
+✔ Enable instant fan engagement experiences
+
+This reduces operational effort and speeds up highlight creation from **minutes → seconds**.
+
+---
+
+## 3️⃣ Key Use Case Example
+
+If **likes** reach a threshold (e.g., 1000 interactions in 2–3 seconds) at **01:30 timecode**,
+the system automatically extracts a **30-second clip** (01:00 → 01:30), uploads metadata, and alerts the app:
+
+🟣 User action → 🔥 Threshold hit → 🎬 Clip created → 📣 Client notified
+
+---
+
+## 4️⃣ Target Audience
+
+| Segment                           | Benefit                     |
+| --------------------------------- | --------------------------- |
+| OTT Streaming Platforms           | Faster highlight generation |
+| Sports, Gaming & Live Events Apps | Viral engagement moments    |
+| Short-form Content Platforms      | Re-use clips instantly      |
+
+Initial platform focus: **Web-based OTT video players**
+
+---
+
+## 5️⃣ Product Goals & KPIs
+
+| Goal                       | Measurement                            |
+| -------------------------- | -------------------------------------- |
+| Reduce clipping time       | 0–5 seconds from event trigger         |
+| Increase user engagement   | Likes per minute, users watching clips |
+| Improve content re-sharing | Viral engagement optimizations         |
+
+---
+
+## 6️⃣ User Flow (End-to-End)
+
+1️⃣ User taps ❤️ Like rapidly
+2️⃣ Engagement count recorded in realtime
+3️⃣ Threshold exceeded → SDK triggers event
+4️⃣ Backend listens → Clip generated using FFmpeg
+5️⃣ Metadata stored in Firebase
+6️⃣ Client receives:
+
+* Push notification **OR**
+* Polling via REST API
+  7️⃣ App optionally shows UI:
+
+> “🔥 Hot moment captured!”
+
+---
+
+## 7️⃣ Features & Requirements
+
+### 7.1 Engagement Tracking (SDK)
+
+| Requirement                          | Priority |
+| ------------------------------------ | -------- |
+| Capture user likes/unlikes           | P1       |
+| Maintain per-second aggregation      | P1       |
+| Configurable threshold               | P1       |
+| Configurable look-back clip duration | P2       |
+
+---
+
+### 7.2 Clip Generation (Backend)
+
+| Requirement                                     | Priority |
+| ----------------------------------------------- | -------- |
+| FFmpeg extract last X seconds at trigger moment | P1       |
+| Generate MP4 output                             | P1       |
+| Store video file locally (POC)                  | P1       |
+| Prevent duplicate triggers within 30 seconds    | P2       |
+
+---
+
+### 7.3 Notifications / Delivery
+
+| Requirement                                  | Priority |
+| -------------------------------------------- | -------- |
+| Polling API for clip status                  | P1       |
+| Optional instant UI banner                   | P2       |
+| Configurable action buttons (Share/Download) | P3       |
+
+---
+
+### 7.4 Player Support
+
+| Support Type                        | Status   |
+| ----------------------------------- | -------- |
+| Web player (HTML5 / Shaka / HLS.js) | P1 / POC |
+| Mobile native                       | Future   |
+| Smart TV SDKs                       | Future   |
+
+---
+
+## 8️⃣ Functional Architecture
+
+```
+[User Engagement UI - React/Web]
+               |
+          (SDK - JS)
+               |
+        Realtime Data
+               |
+     [Firebase Firestore]
+               |
+     Backend Processor (Python)
+               |
+     FFmpeg Clip Extraction
+               |
+   Firebase Metadata Update
+               |
+     Client Fetches Notification
+```
+
+---
+
+## 9️⃣ Technology Stack
+
+| Layer                          | Tech                            |
+| ------------------------------ | ------------------------------- |
+| Frontend                       | ReactJS                         |
+| Client SDK                     | JavaScript                      |
+| Backend Worker                 | Python                          |
+| Video Processing               | FFmpeg                          |
+| Database                       | Firebase Firestore              |
+| Hosting (later)                | Vercel / Cloud Run / AWS Lambda |
+| Notification System (optional) | Firebase Cloud Messaging        |
+
+---
+
+## 🔟 Database (POC — Firestore Schema)
+
+**Collection: `clips`**
+
+```
+clipId
+fileName
+startTime
+endTime
+timestampCreated
+status: queued | processing | ready
+filePath (local or future CDN URL)
+engagementCount
+clientAppId
+```
+
+**Collection: `engagement_events`**
+
+```
+timestamp
+videoTime
+count
+```
+
+---
+
+## 1️⃣1️⃣ Configurability Matrix
+
+| Parameter                       | Adjustable by Client? |
+| ------------------------------- | --------------------- |
+| Engagement threshold            | YES                   |
+| Clip duration                   | YES                   |
+| Trigger actions (like / unlike) | YES                   |
+| Notification UI                 | YES                   |
+| Sharing & Download controls     | YES                   |
+
+These will be exposed via **SDK config**.
+
+---
+
+## 1️⃣2️⃣ Business Model (Initial)
+
+| Plan                       | Limit                                  |
+| -------------------------- | -------------------------------------- |
+| Free Tier                  | 5 clips (30s each → 150 total seconds) |
+| Per Clip Pricing           | TBD after POC                          |
+| Monthly Retention Optional | Additional storage fee                 |
+
+---
+
+## 1️⃣3️⃣ Out of Scope (POC)
+
+🚫 Multi-CDN
+🚫 Mobile SDKs
+🚫 AI-based auto-hot-moment detection
+🚫 DRM/PR features
+🚫 Multi-team clip editing
+
+---
+
+## 1️⃣4️⃣ Risks & Mitigations
+
+| Risk                                   | Mitigation                  |
+| -------------------------------------- | --------------------------- |
+| High CPU load during FFmpeg operations | Queue system                |
+| Engagement flooding                    | Rate-limiting triggers      |
+| Clip duplication                       | Debounce time window        |
+| Local storage limits                   | Optional cloud upload later |
+
+---
+
+## 1️⃣5️⃣ Success Criteria
+
+| Metric                      | Target       |
+| --------------------------- | ------------ |
+| Clip generation latency     | ≤ 5 seconds  |
+| Engagement trigger accuracy | 95% match    |
+| SDK integration time        | < 10 minutes |
+
+---
+
+## Appendix: Future Enhancements
+
+🔹 AI Hot Moment Detection — audio peaks, cheering, player faces
+🔹 Live thumbnails preview
+🔹 Social sharing presets
+🔹 Cross-platform SDKs (Android, iOS, CTV)
+🔹 Auto fall-back on Bad Network
