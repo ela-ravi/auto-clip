@@ -4,9 +4,10 @@ import Hls from "hls.js";
 const LivePlayer = () => {
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
+  const apiBase = process.env.REACT_APP_API_BASE || "http://localhost:5001";
   // Use the local backend stream endpoint (serves HLS files from the server)
   // This avoids Supabase signed-url issues while developing locally.
-  const streamURL = "http://localhost:5001/stream/stream.m3u8";
+  const streamURL = `${apiBase}/stream/stream.m3u8`;
 
   // Player State
   const [error, setError] = useState(null);
@@ -29,6 +30,7 @@ const LivePlayer = () => {
   });
   const [heartCount, setHeartCount] = useState(0);
   const [dislikeCount, setDislikeCount] = useState(0);
+  const [clips, setClips] = useState([]);
 
   const maybeDownloadFile = async (res) => {
     const disposition = res.headers.get('Content-Disposition') || '';
@@ -56,6 +58,15 @@ const LivePlayer = () => {
     return false;
   };
 
+  const fetchClips = async () => {
+    try {
+      const res = await fetch(`${apiBase}/clips`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setClips(Array.isArray(data.clips) ? data.clips : []);
+    } catch (_) {}
+  };
+
   // Video Management State
   const [videos, setVideos] = useState([]);
   const [currentVideo, setCurrentVideo] = useState("");
@@ -64,11 +75,12 @@ const LivePlayer = () => {
   // Fetch available videos on mount
   useEffect(() => {
     fetchVideos();
+    fetchClips();
   }, []);
 
   const fetchVideos = async () => {
     try {
-      const response = await fetch('http://localhost:5001/videos');
+      const response = await fetch(`${apiBase}/videos`);
       const data = await response.json();
       setVideos(data.videos);
       setCurrentVideo(data.current);
@@ -142,7 +154,7 @@ const LivePlayer = () => {
       setClipping(true);
       setClipMessage(`Creating clip from ${Math.floor(clipStartTime)}s to ${Math.floor(clipEndTime)}s...`);
 
-      const response = await fetch('http://localhost:5001/clip', {
+      const response = await fetch(`${apiBase}/clip`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -233,7 +245,7 @@ const LivePlayer = () => {
     if (!video) return;
     try {
       const t = Number.isFinite(video.duration) ? video.currentTime : video.currentTime;
-      const res = await fetch('http://localhost:5001/react', {
+      const res = await fetch(`${apiBase}/react`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'heart', user_id: userId, t })
@@ -243,6 +255,9 @@ const LivePlayer = () => {
       if (downloaded) return;
       const data = await res.json();
       setHeartCount(data.unique_in_window ?? 0);
+      if (data.stored) {
+        fetchClips();
+      }
     } catch (_) {}
   };
 
@@ -251,7 +266,7 @@ const LivePlayer = () => {
     if (!video) return;
     try {
       const t = Number.isFinite(video.duration) ? video.currentTime : video.currentTime;
-      const res = await fetch('http://localhost:5001/react', {
+      const res = await fetch(`${apiBase}/react`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'dislike', user_id: userId, t })
@@ -261,6 +276,9 @@ const LivePlayer = () => {
       if (downloaded) return;
       const data = await res.json();
       setDislikeCount(data.unique_in_window ?? 0);
+      if (data.stored) {
+        fetchClips();
+      }
     } catch (_) {}
   };
 
@@ -273,7 +291,7 @@ const LivePlayer = () => {
     formData.append('file', file);
 
     try {
-      const response = await fetch('http://localhost:5001/upload', {
+      const response = await fetch(`${apiBase}/upload`, {
         method: 'POST',
         body: formData,
       });
@@ -298,7 +316,7 @@ const LivePlayer = () => {
 
     try {
       setStatus("Switching stream...");
-      const response = await fetch('http://localhost:5001/start_stream', {
+      const response = await fetch(`${apiBase}/start_stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filename }),
@@ -363,6 +381,34 @@ const LivePlayer = () => {
           🎬 {clipMessage}
         </p>
       )}
+
+      {/* Clips Gallery */}
+      <div style={{ marginTop: "20px", padding: "10px" }}>
+        <h3 style={{ textAlign: "left", maxWidth: 980, margin: "0 auto 10px" }}>Recent Clips</h3>
+        {clips.length === 0 ? (
+          <p style={{ color: "#666", fontSize: "14px" }}>No clips yet.</p>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "12px", maxWidth: 980, margin: "0 auto" }}>
+            {clips.map((c) => (
+              <div key={c.path} style={{ border: "1px solid #ddd", borderRadius: 8, padding: 8, background: "#fafafa" }}>
+                {c.public_url ? (
+                  <video src={c.public_url} controls style={{ width: "100%", borderRadius: 6 }} />
+                ) : (
+                  <div style={{ height: 120, display: "flex", alignItems: "center", justifyContent: "center", background: "#eee", borderRadius: 6 }}>
+                    <span style={{ color: "#999" }}>No public URL</span>
+                  </div>
+                )}
+                <div style={{ marginTop: 6 }}>
+                  <div style={{ fontSize: 12, color: "#333", wordBreak: "break-all" }}>{c.name}</div>
+                  {c.public_url && (
+                    <a href={c.public_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>Open</a>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <p style={{ color: "#999", fontSize: "12px", marginTop: "10px" }}>
         💡 Tip: Hold Ctrl+Alt (Windows) or Ctrl+Option (Mac) and click on the video to clip 30 seconds backward

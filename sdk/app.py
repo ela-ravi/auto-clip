@@ -44,6 +44,7 @@ CLIP_BACK_SECONDS = int(os.getenv("CLIP_BACK_SECONDS", 30))
 # ---- state ----
 CURRENT_FFMPEG_PROCESS = None
 CURRENT_VIDEO_SOURCE = VIDEO_SOURCE
+CURRENT_INPUT_HEADERS = None  # list of header lines like ["Authorization: Bearer ..."] or None
 
 # In-memory reaction aggregation: {reaction_type: [ {time: server_ts, user_id: str, t: float} ]}
 REACTION_EVENTS = {
@@ -64,6 +65,50 @@ def add_cors_headers(response):
     response.headers.setdefault("Access-Control-Expose-Headers", "Content-Type, Content-Disposition")
     response.headers.setdefault("Access-Control-Max-Age", "86400")
     return response
+
+@app.route("/clips", methods=["GET"])
+def list_clips():
+    try:
+        # Attempt to list objects in 'clips/' folder from the configured bucket
+        items = []
+        try:
+            # supabase-py list signature differs across versions; handle common patterns
+            try:
+                resp = supabase.storage.from_(SUPABASE_BUCKET).list(path="clips")
+            except TypeError:
+                # fallback older signature
+                resp = supabase.storage.from_(SUPABASE_BUCKET).list("clips")
+            for obj in resp or []:
+                # obj may be dict with keys: name, id, updated_at, created_at, last_modified, metadata, size
+                name = obj.get("name") if isinstance(obj, dict) else None
+                if not name:
+                    continue
+                path = f"clips/{name}"
+                # public url
+                try:
+                    pub = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(path)
+                    public_url = pub.get("publicUrl") if isinstance(pub, dict) else pub
+                except Exception:
+                    public_url = None
+                items.append({
+                    "name": name,
+                    "path": path,
+                    "size": obj.get("metadata", {}).get("size") if isinstance(obj, dict) else None,
+                    "last_modified": obj.get("updated_at") or obj.get("last_modified") if isinstance(obj, dict) else None,
+                    "public_url": public_url,
+                })
+        except Exception as e:
+            return jsonify({"error": f"Failed to list clips: {e}"}), 500
+
+        # newest first by last_modified if present; else by name
+        try:
+            items.sort(key=lambda x: x.get("last_modified") or x.get("name"), reverse=True)
+        except Exception:
+            pass
+
+        return jsonify({"clips": items})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ---- HTML page (client pinned to LIVE) ----
 HTML_PAGE = """
@@ -130,11 +175,12 @@ def stop_transcoding():
         CURRENT_FFMPEG_PROCESS = None
 
 # ---- start transcoding: strict live mode ----
-def start_transcoding(video_file: str = None):
-    global CURRENT_FFMPEG_PROCESS, CURRENT_VIDEO_SOURCE
+def start_transcoding(video_file: str = None, input_headers=None):
+    global CURRENT_FFMPEG_PROCESS, CURRENT_VIDEO_SOURCE, CURRENT_INPUT_HEADERS
 
     if video_file:
         CURRENT_VIDEO_SOURCE = video_file
+        CURRENT_INPUT_HEADERS = list(input_headers) if input_headers else None
 
     stop_transcoding()
 
@@ -151,7 +197,20 @@ def start_transcoding(video_file: str = None):
     command = [
         "ffmpeg",
         "-re",
-        "-stream_loop", "-1",
+    ]
+
+    # For local files, loop indefinitely; for URLs, many servers auto-loop. We keep loop only for local files.
+    is_url = isinstance(CURRENT_VIDEO_SOURCE, str) and CURRENT_VIDEO_SOURCE.startswith(("http://", "https://"))
+    if not is_url:
+        command += ["-stream_loop", "-1"]
+
+    # Optional input headers for remote sources (e.g., Google Photos)
+    if CURRENT_INPUT_HEADERS:
+        # ffmpeg expects CRLF-joined headers string
+        headers_str = "\r\n".join(CURRENT_INPUT_HEADERS)
+        command += ["-headers", headers_str]
+
+    command += [
         "-i", CURRENT_VIDEO_SOURCE,
         # force constant frame rate & regenerate timestamps
         "-vf", "fps=25",
@@ -180,6 +239,51 @@ def start_transcoding(video_file: str = None):
     if not any(t.name == "uploader" for t in threading.enumerate()):
         uploader = threading.Thread(target=upload_new_segments, name="uploader", daemon=True)
         uploader.start()
+
+@app.route("/start_stream_url", methods=["POST"])
+def start_stream_url():
+    try:
+        data = request.get_json() or {}
+        url = data.get("url")
+        if not url or not isinstance(url, str):
+            return jsonify({"error": "url is required"}), 400
+        headers_obj = data.get("headers") or {}
+        headers_list = []
+        if isinstance(headers_obj, dict):
+            for k, v in headers_obj.items():
+                headers_list.append(f"{k}: {v}")
+        elif isinstance(headers_obj, list):
+            headers_list = [str(h) for h in headers_obj]
+        start_transcoding(url, headers_list or None)
+        return jsonify({"ok": True, "current": url})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/start_stream_gphotos", methods=["POST"])
+def start_stream_gphotos():
+    try:
+        data = request.get_json() or {}
+        media_item_id = data.get("media_item_id")
+        access_token = data.get("access_token")
+        if not media_item_id or not access_token:
+            return jsonify({"error": "media_item_id and access_token are required"}), 400
+
+        import requests
+        meta_url = f"https://photoslibrary.googleapis.com/v1/mediaItems/{media_item_id}"
+        resp = requests.get(meta_url, headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
+        if resp.status_code != 200:
+            return jsonify({"error": f"Failed to fetch media item: {resp.text}"}), resp.status_code
+        meta = resp.json()
+        base_url = meta.get("baseUrl")
+        if not base_url:
+            return jsonify({"error": "No baseUrl in media item"}), 400
+        # Google Photos: append =dv to get downloadable video content
+        video_url = base_url + "=dv"
+        headers_list = [f"Authorization: Bearer {access_token}"]
+        start_transcoding(video_url, headers_list)
+        return jsonify({"ok": True, "current": video_url})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ---- uploader: upload stable files to Supabase Storage ----
 def is_file_stable(path: str, delay: float = 0.5) -> bool:
@@ -403,7 +507,7 @@ def react():
         })
         triggered, start_time, end_time, uniq = _maybe_trigger_clip(reaction_type)
         if triggered:
-            # Create the clip synchronously and return it as a file download
+            # Create the clip synchronously and upload it to storage
             try:
                 duration = max(0.1, end_time - start_time)
                 clip_filename = f"clip_{uuid.uuid4().hex[:8]}_{int(start_time)}_{int(end_time)}.mp4"
@@ -423,10 +527,33 @@ def react():
                 if result.returncode != 0:
                     print("[REACT CLIP] ffmpeg error:", result.stderr)
                     return jsonify({"error": "Clip creation failed"}), 500
+                # Upload to Supabase Storage under clips/
+                remote_path = f"clips/{os.path.basename(clip_path)}"
+                try:
+                    upload_to_supabase(clip_path, remote_path, content_type="video/mp4")
+                except Exception as up_err:
+                    print("[REACT CLIP] upload error:", up_err)
+                    return jsonify({"error": "Clip upload failed"}), 500
+                public_url = None
+                try:
+                    # get_public_url returns a dict in some client versions; handle both cases
+                    res = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(remote_path)
+                    public_url = res.get("publicUrl") if isinstance(res, dict) else res
+                except Exception:
+                    public_url = None
                 # Reset reaction window to avoid duplicate triggers
                 REACTION_EVENTS[reaction_type] = []
-                print(f"[REACT] Synchronous clip for '{reaction_type}' t={end_time:.2f} (start {start_time:.2f}) from {uniq} users")
-                return send_file(clip_path, as_attachment=True, download_name=os.path.basename(clip_path))
+                print(f"[REACT] Stored clip for '{reaction_type}' t={end_time:.2f} (start {start_time:.2f}) -> {remote_path}")
+                return jsonify({
+                    "ok": True,
+                    "stored": True,
+                    "bucket": SUPABASE_BUCKET,
+                    "path": remote_path,
+                    "public_url": public_url,
+                    "start": start_time,
+                    "end": end_time,
+                    "reaction": reaction_type,
+                })
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
         # Not yet at threshold: return JSON status
