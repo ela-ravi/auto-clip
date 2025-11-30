@@ -76,6 +76,7 @@ const LivePlayer = () => {
   useEffect(() => {
     fetchVideos();
     fetchClips();
+    // eslint-disable-next-line
   }, []);
 
   const fetchVideos = async () => {
@@ -147,7 +148,7 @@ const LivePlayer = () => {
         hlsRef.current.destroy();
       }
     };
-  }, [currentVideo]); // Re-init when video changes
+  }, [currentVideo, streamURL]); // Re-init when video changes
 
   const createClip = async (clipStartTime, clipEndTime) => {
     try {
@@ -190,13 +191,13 @@ const LivePlayer = () => {
     }
   };
 
-  const triggerClipFromCurrent = async () => {
-    const video = videoRef.current;
-    if (!video) return;
-    const endTime = Number.isFinite(video.duration) ? video.currentTime : video.currentTime;
-    const startTime = Math.max(0, endTime - 30);
-    await createClip(startTime, endTime);
-  };
+  // const triggerClipFromCurrent = async () => {
+  //   const video = videoRef.current;
+  //   if (!video) return;
+  //   const endTime = Number.isFinite(video.duration) ? video.currentTime : video.currentTime;
+  //   const startTime = Math.max(0, endTime - 30);
+  //   await createClip(startTime, endTime);
+  // };
 
   const handleVideoClick = async (e) => {
     const video = videoRef.current;
