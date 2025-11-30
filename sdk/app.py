@@ -23,7 +23,8 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ---- Flask app ----
 app = Flask(__name__)
-CORS(app)
+# Allow all origins globally; no credentials
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
 
 # ---- configuration ----
 VIDEO_SOURCE = os.getenv("VIDEO_SOURCE", "test.mp4")
@@ -36,14 +37,33 @@ PLAYLIST_NAME = "stream.m3u8"
 HLS_TIME = 20
 HLS_LIST_SIZE = 30  # sliding window length
 POLL_INTERVAL = 0.6  # seconds for uploader loop
+REACTION_WINDOW_SEC = float(os.getenv("REACTION_WINDOW_SEC", 3))
+REACTION_THRESHOLD = int(os.getenv("REACTION_THRESHOLD", 1))
+CLIP_BACK_SECONDS = int(os.getenv("CLIP_BACK_SECONDS", 30))
 
 # ---- state ----
 CURRENT_FFMPEG_PROCESS = None
 CURRENT_VIDEO_SOURCE = VIDEO_SOURCE
 
+# In-memory reaction aggregation: {reaction_type: [ {time: server_ts, user_id: str, t: float} ]}
+REACTION_EVENTS = {
+    "heart": [],
+    "dislike": [],
+}
+
 # create directories
 os.makedirs(HLS_OUTPUT_DIR, exist_ok=True)
 os.makedirs(CLIPS_DIR, exist_ok=True)
+
+# Ensure permissive CORS headers (in addition to flask-cors defaults)
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers.setdefault("Access-Control-Allow-Headers", "Content-Type, Authorization")
+    response.headers.setdefault("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+    response.headers.setdefault("Access-Control-Expose-Headers", "Content-Type, Content-Disposition")
+    response.headers.setdefault("Access-Control-Max-Age", "86400")
+    return response
 
 # ---- HTML page (client pinned to LIVE) ----
 HTML_PAGE = """
@@ -300,6 +320,123 @@ def create_clip():
             print("Clip ffmpeg err:", result.stderr)
             return jsonify({"error": "Clip creation failed"}), 500
         return send_file(clip_path, as_attachment=True, download_name=os.path.basename(clip_path))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---- reaction aggregation and server-side clipping ----
+def _purge_old_events(now_ts: float):
+    cutoff = now_ts - REACTION_WINDOW_SEC
+    for key in list(REACTION_EVENTS.keys()):
+        REACTION_EVENTS[key] = [e for e in REACTION_EVENTS[key] if e["time"] >= cutoff]
+
+def _clip_async(start_time: float, end_time: float):
+    try:
+        duration = max(0.1, end_time - start_time)
+        clip_filename = f"clip_{uuid.uuid4().hex[:8]}_{int(start_time)}_{int(end_time)}.mp4"
+        clip_path = os.path.join(CLIPS_DIR, clip_filename)
+        command = [
+            "ffmpeg",
+            "-ss", str(start_time),
+            "-i", CURRENT_VIDEO_SOURCE,
+            "-t", str(duration),
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            "-preset", "ultrafast",
+            "-y",
+            clip_path
+        ]
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            print("[CLIP] ffmpeg error:", result.stderr)
+        else:
+            print(f"[CLIP] Created {clip_path}")
+    except Exception as e:
+        print("[CLIP] Exception:", e)
+
+def _maybe_trigger_clip(reaction_type: str):
+    now_ts = time.time()
+    _purge_old_events(now_ts)
+    events = REACTION_EVENTS.get(reaction_type, [])
+    # Map latest event per user within window
+    latest_by_user = {}
+    for e in events:
+        latest_by_user[e["user_id"]] = e
+    unique_count = len(latest_by_user)
+    if unique_count >= REACTION_THRESHOLD:
+        # choose end_time as median of client-reported t's to reduce outliers
+        times = sorted(ev["t"] for ev in latest_by_user.values())
+        mid = len(times) // 2
+        if len(times) % 2 == 1:
+            end_time = times[mid]
+        else:
+            end_time = 0.5 * (times[mid - 1] + times[mid])
+        start_time = max(0.0, end_time - CLIP_BACK_SECONDS)
+        # Indicate a synchronous clip should be created by caller
+        return True, start_time, end_time, unique_count
+    return False, None, None, unique_count
+
+@app.route("/react", methods=["POST", "OPTIONS"])
+def react():
+    # Handle preflight explicitly
+    if request.method == "OPTIONS":
+        return ("", 204)
+    try:
+        data = request.get_json() or {}
+        reaction_type = str(data.get("type", "")).lower()
+        if reaction_type not in REACTION_EVENTS:
+            return jsonify({"error": "Invalid reaction type"}), 400
+        user_id = str(data.get("user_id") or "").strip()
+        if not user_id:
+            return jsonify({"error": "user_id required"}), 400
+        try:
+            t = float(data.get("t"))
+            if not (t >= 0):
+                raise ValueError
+        except Exception:
+            return jsonify({"error": "valid 't' (seconds) required"}), 400
+
+        now_ts = time.time()
+        REACTION_EVENTS[reaction_type].append({
+            "time": now_ts,
+            "user_id": user_id,
+            "t": t,
+        })
+        triggered, start_time, end_time, uniq = _maybe_trigger_clip(reaction_type)
+        if triggered:
+            # Create the clip synchronously and return it as a file download
+            try:
+                duration = max(0.1, end_time - start_time)
+                clip_filename = f"clip_{uuid.uuid4().hex[:8]}_{int(start_time)}_{int(end_time)}.mp4"
+                clip_path = os.path.join(CLIPS_DIR, clip_filename)
+                command = [
+                    "ffmpeg",
+                    "-ss", str(start_time),
+                    "-i", CURRENT_VIDEO_SOURCE,
+                    "-t", str(duration),
+                    "-c:v", "libx264",
+                    "-c:a", "aac",
+                    "-preset", "ultrafast",
+                    "-y",
+                    clip_path
+                ]
+                result = subprocess.run(command, capture_output=True, text=True)
+                if result.returncode != 0:
+                    print("[REACT CLIP] ffmpeg error:", result.stderr)
+                    return jsonify({"error": "Clip creation failed"}), 500
+                # Reset reaction window to avoid duplicate triggers
+                REACTION_EVENTS[reaction_type] = []
+                print(f"[REACT] Synchronous clip for '{reaction_type}' t={end_time:.2f} (start {start_time:.2f}) from {uniq} users")
+                return send_file(clip_path, as_attachment=True, download_name=os.path.basename(clip_path))
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+        # Not yet at threshold: return JSON status
+        return jsonify({
+            "ok": True,
+            "reaction": reaction_type,
+            "unique_in_window": uniq,
+            "window_sec": REACTION_WINDOW_SEC,
+            "threshold": REACTION_THRESHOLD,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

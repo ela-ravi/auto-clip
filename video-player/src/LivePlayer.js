@@ -16,6 +16,46 @@ const LivePlayer = () => {
   const [clipping, setClipping] = useState(false);
   const [clipMessage, setClipMessage] = useState("");
 
+  const [userId] = useState(() => {
+    try {
+      const existing = localStorage.getItem("anonUserId");
+      if (existing) return existing;
+      const generated = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now() + Math.random());
+      localStorage.setItem("anonUserId", generated);
+      return generated;
+    } catch (_) {
+      return String(Date.now() + Math.random());
+    }
+  });
+  const [heartCount, setHeartCount] = useState(0);
+  const [dislikeCount, setDislikeCount] = useState(0);
+
+  const maybeDownloadFile = async (res) => {
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const ctype = (res.headers.get('Content-Type') || '').toLowerCase();
+    const isAttachment = disposition.includes('attachment');
+    const isMedia = ctype.includes('application/octet-stream') || ctype.includes('video/mp4');
+    if (isAttachment || isMedia) {
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      // try extract filename from Content-Disposition
+      let filename = 'clip.mp4';
+      const match = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(disposition);
+      if (match) {
+        filename = decodeURIComponent(match[1] || match[2]);
+      }
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+      return true;
+    }
+    return false;
+  };
+
   // Video Management State
   const [videos, setVideos] = useState([]);
   const [currentVideo, setCurrentVideo] = useState("");
@@ -97,6 +137,55 @@ const LivePlayer = () => {
     };
   }, [currentVideo]); // Re-init when video changes
 
+  const createClip = async (clipStartTime, clipEndTime) => {
+    try {
+      setClipping(true);
+      setClipMessage(`Creating clip from ${Math.floor(clipStartTime)}s to ${Math.floor(clipEndTime)}s...`);
+
+      const response = await fetch('http://localhost:5001/clip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          start_time: clipStartTime,
+          end_time: clipEndTime,
+        }),
+      });
+
+      if (!response.ok) throw new Error('Failed to create clip');
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `clip_${Math.floor(clipStartTime)}-${Math.floor(clipEndTime)}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+
+      setClipMessage('Clip downloaded successfully!');
+      setTimeout(() => {
+        setClipping(false);
+        setClipMessage('');
+      }, 3000);
+    } catch (error) {
+      console.error('Error creating clip:', error);
+      setClipMessage('Failed to create clip. Please try again.');
+      setTimeout(() => {
+        setClipping(false);
+        setClipMessage('');
+      }, 3000);
+    }
+  };
+
+  const triggerClipFromCurrent = async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const endTime = Number.isFinite(video.duration) ? video.currentTime : video.currentTime;
+    const startTime = Math.max(0, endTime - 30);
+    await createClip(startTime, endTime);
+  };
+
   const handleVideoClick = async (e) => {
     const video = videoRef.current;
     if (!video) return;
@@ -127,35 +216,7 @@ const LivePlayer = () => {
       const clipEndTime = clickedTime;
       const clipStartTime = Math.max(0, clickedTime - 30);
 
-      setClipping(true);
-      setClipMessage(`Creating clip from ${Math.floor(clipStartTime)}s to ${Math.floor(clipEndTime)}s...`);
-
-      const response = await fetch('http://localhost:5001/clip', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          start_time: clipStartTime,
-          end_time: clipEndTime,
-        }),
-      });
-
-      if (!response.ok) throw new Error('Failed to create clip');
-
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `clip_${Math.floor(clipStartTime)}-${Math.floor(clipEndTime)}.mp4`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
-
-      setClipMessage('Clip downloaded successfully!');
-      setTimeout(() => {
-        setClipping(false);
-        setClipMessage('');
-      }, 3000);
+      await createClip(clipStartTime, clipEndTime);
 
     } catch (error) {
       console.error('Error creating clip:', error);
@@ -165,6 +226,42 @@ const LivePlayer = () => {
         setClipMessage('');
       }, 3000);
     }
+  };
+
+  const handleHeart = async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      const t = Number.isFinite(video.duration) ? video.currentTime : video.currentTime;
+      const res = await fetch('http://localhost:5001/react', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'heart', user_id: userId, t })
+      });
+      if (!res.ok) return;
+      const downloaded = await maybeDownloadFile(res.clone());
+      if (downloaded) return;
+      const data = await res.json();
+      setHeartCount(data.unique_in_window ?? 0);
+    } catch (_) {}
+  };
+
+  const handleDislike = async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      const t = Number.isFinite(video.duration) ? video.currentTime : video.currentTime;
+      const res = await fetch('http://localhost:5001/react', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'dislike', user_id: userId, t })
+      });
+      if (!res.ok) return;
+      const downloaded = await maybeDownloadFile(res.clone());
+      if (downloaded) return;
+      const data = await res.json();
+      setDislikeCount(data.unique_in_window ?? 0);
+    } catch (_) {}
   };
 
   const handleUpload = async (e) => {
@@ -247,6 +344,15 @@ const LivePlayer = () => {
           />
           {uploading && <span style={{ color: "blue" }}>Uploading...</span>}
         </div>
+      </div>
+
+      <div style={{ marginBottom: "12px" }}>
+        <button onClick={handleHeart} style={{ fontSize: "16px", padding: "6px 10px", marginRight: "8px", cursor: "pointer" }}>
+          ❤️ {heartCount}
+        </button>
+        <button onClick={handleDislike} style={{ fontSize: "16px", padding: "6px 10px", cursor: "pointer" }}>
+          👎 {dislikeCount}
+        </button>
       </div>
 
       {status && <p style={{ color: "#666", fontSize: "14px" }}>Status: {status}</p>}
